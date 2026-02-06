@@ -1,0 +1,8 @@
+{
+  "name": "sistem tetuanhairi",
+  "description": "A comprehensive legal firm management system with service tracking, automated receipts (Bluetooth/Thermal/A5), client records, and AI-powered legal assistance.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}

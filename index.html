@@ -1,0 +1,81 @@
+
+<!DOCTYPE html>
+<html lang="ms">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LawFirmHM Pro</title>
+    <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700&family=Lato:wght@300;400;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'law-bg': '#0a0a0a',
+                        'law-card': '#1a1a1a',
+                        'law-gold': '#d4af37',
+                        'law-red': '#8b0000',
+                        'law-orange': '#ff4500',
+                        'law-yellow': '#ffae00',
+                    },
+                    fontFamily: {
+                        cinzel: ['Cinzel', 'serif'],
+                        lato: ['Lato', 'sans-serif'],
+                    },
+                    animation: {
+                        'fade-in': 'fadeIn 0.5s ease-out forwards',
+                        'scale-up': 'scaleUp 0.3s ease-out forwards',
+                    },
+                    keyframes: {
+                        fadeIn: {
+                            '0%': { opacity: '0' },
+                            '100%': { opacity: '1' },
+                        },
+                        scaleUp: {
+                            '0%': { transform: 'scale(0.95)', opacity: '0' },
+                            '100%': { transform: 'scale(1)', opacity: '1' },
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #333; border-radius: 10px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #444; }
+
+        @media print {
+            body * { visibility: hidden; }
+            #print-area-a5, #print-area-a5 * { visibility: visible; }
+            .printing-a5 #print-area-a5 {
+                position: absolute; left: 0; top: 0; width: 100%;
+                background: white; color: black; padding: 20px; display: block !important; font-size: 12px;
+            }
+            @page { size: auto; margin: 5mm; }
+            
+            .printing-thermal #print-area-thermal, .printing-thermal #print-area-thermal * { visibility: visible; }
+            .printing-thermal #print-area-thermal {
+                position: absolute; left: 0; top: 0; width: 58mm; background: white; color: black; padding: 0; margin: 0; display: block !important;
+                font-family: 'Courier New', Courier, monospace; font-size: 12px;
+            }
+        }
+    </style>
+<script type="importmap">
+{
+  "imports": {
+    "react-dom/": "https://esm.sh/react-dom@^19.2.4/",
+    "react/": "https://esm.sh/react@^19.2.4/",
+    "react": "https://esm.sh/react@^19.2.4",
+    "@google/genai": "https://esm.sh/@google/genai@^1.38.0"
+  }
+}
+</script>
+</head>
+<body class="bg-law-bg text-gray-200 font-lato antialiased overflow-x-hidden custom-scrollbar">
+    <div id="root"></div>
+</body>
+</html>
