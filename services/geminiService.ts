@@ -3,6 +3,10 @@ import { GoogleGenAI, Type } from "@google/genai";
 
 export async function analyzeLegalServices(services: string[], clientInfo: string) {
   try {
+    if (!process.env.API_KEY) {
+      console.warn("API_KEY is missing.");
+      return "Sila masukkan API KEY untuk menggunakan fungsi AI.";
+    }
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     const response = await ai.models.generateContent({
       model: 'gemini-3-flash-preview',
@@ -15,12 +19,16 @@ export async function analyzeLegalServices(services: string[], clientInfo: strin
     return response.text;
   } catch (error) {
     console.error("Gemini Error:", error);
-    return "Maaf, AI gagal menjana rumusan buat masa ini.";
+    return "Maaf, AI gagal menjana rumusan buat masa ini. Sila cuba sebentar lagi.";
   }
 }
 
 export async function generateLegalAdvice(services: string[]) {
   try {
+    if (!process.env.API_KEY) {
+       console.warn("API_KEY is missing.");
+       return { tips: ["Sila hubungi pentadbir sistem untuk mengaktifkan fungsi AI."] };
+    }
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     const response = await ai.models.generateContent({
       model: 'gemini-3-flash-preview',
@@ -45,7 +53,14 @@ export async function generateLegalAdvice(services: string[]) {
     
     const text = response.text;
     if (!text) return { tips: [] };
-    return JSON.parse(text);
+    
+    try {
+      return JSON.parse(text);
+    } catch (parseError) {
+      console.error("JSON Parse Error:", parseError);
+      return { tips: ["Gagal memproses respons AI."] };
+    }
+
   } catch (error) {
     console.error("Gemini Advice Error:", error);
     return { 

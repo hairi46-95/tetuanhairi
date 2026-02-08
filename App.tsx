@@ -35,21 +35,19 @@ const HMLogo: React.FC<{ className?: string }> = ({ className }) => (
 
 // Utility for date formatting
 const getTodayISO = () => new Date().toISOString().split('T')[0];
+
 const formatDateForDisplay = (isoDate: string) => {
   if (!isoDate) return '-';
-  // If already in display format, return it
+  // Check if already in DD/MM/YYYY format to prevent double conversion errors
   if (isoDate.includes('/')) return isoDate;
-  const [y, m, d] = isoDate.split('-');
-  return `${d}/${m}/${y}`;
-};
-const formatDateForInput = (displayDate: string) => {
-  if (!displayDate) return getTodayISO();
-  // If displayDate is DD/MM/YYYY
-  if (displayDate.includes('/')) {
-    const [d, m, y] = displayDate.split('/');
-    return `${y}-${m}-${d}`;
+  
+  try {
+    const [y, m, d] = isoDate.split('-');
+    if (!y || !m || !d) return isoDate;
+    return `${d}/${m}/${y}`;
+  } catch (e) {
+    return isoDate;
   }
-  return displayDate; // Already in ISO format
 };
 
 const App: React.FC = () => {
@@ -104,7 +102,7 @@ const App: React.FC = () => {
   const [bt, setBt] = useState<BluetoothState>({
     device: null,
     characteristic: null,
-    status: 'Bluetooth: Tidak Bersambung (Klik Cari Device)',
+    status: 'Bluetooth: Tidak Bersambung',
     connected: false
   });
 
@@ -118,6 +116,16 @@ const App: React.FC = () => {
   const total = useMemo(() => {
     return cart.reduce((sum, item) => sum + item.price, 0);
   }, [cart]);
+
+  // Sort clients by date (newest first)
+  const sortedClients = useMemo(() => {
+    return [...clients].sort((a, b) => {
+      // Handle both ISO YYYY-MM-DD and Legacy DD/MM/YYYY
+      const dateA = a.date.includes('/') ? a.date.split('/').reverse().join('-') : a.date;
+      const dateB = b.date.includes('/') ? b.date.split('/').reverse().join('-') : b.date;
+      return dateB.localeCompare(dateA) || Number(b.id) - Number(a.id);
+    });
+  }, [clients]);
 
   // --- Effects ---
   useEffect(() => {
@@ -137,32 +145,37 @@ const App: React.FC = () => {
     if (draft) {
       try {
         const parsed = JSON.parse(draft);
-        setClientForm(parsed.clientForm);
-        setCart(parsed.cart);
-        setEditId(parsed.editId);
+        if (parsed) {
+          setClientForm(parsed.clientForm || { date: getTodayISO(), name: '', phone: '', address: '', payment: PaymentMethod.TUNAI });
+          setCart(parsed.cart || []);
+          setEditId(parsed.editId || null);
+        }
       } catch (e) {
         console.error("Failed to load draft", e);
       }
     }
   }, []);
 
+  // Debounced Auto-save Logic
   useEffect(() => {
-    const intervalTime = Math.max(5, printerSettings.autoSaveInterval || 60) * 1000;
-    const interval = setInterval(() => {
-      const draft = { clientForm, cart, editId };
-      localStorage.setItem('hm_order_draft', JSON.stringify(draft));
-      
-      // Visual notification for auto-save
-      setIsAutoSaveNotifying(true);
-      setTimeout(() => setIsAutoSaveNotifying(false), 2500);
-    }, intervalTime);
+    const saveTimer = setTimeout(() => {
+      // Only auto-save if there is data
+      if (clientForm.name || cart.length > 0) {
+        const draft = { clientForm, cart, editId };
+        localStorage.setItem('hm_order_draft', JSON.stringify(draft));
+        
+        setIsAutoSaveNotifying(true);
+        const notifyTimer = setTimeout(() => setIsAutoSaveNotifying(false), 2000);
+        return () => clearTimeout(notifyTimer);
+      }
+    }, 2000); // Wait 2 seconds after last change
 
-    return () => clearInterval(interval);
-  }, [clientForm, cart, editId, printerSettings.autoSaveInterval]);
+    return () => clearTimeout(saveTimer);
+  }, [clientForm, cart, editId]);
 
   // --- Actions ---
   const handleAddService = () => {
-    if (!newService.name || !newService.price) return;
+    if (!newService.name || !newService.price) return alert("Sila isi nama dan harga servis.");
     const item: Service = {
       id: Date.now().toString(),
       name: newService.name.toUpperCase(),
@@ -184,6 +197,12 @@ const App: React.FC = () => {
 
   const removeFromCart = (id: string) => {
     setCart(cart.filter(c => c.id !== id));
+  };
+
+  const clearCart = () => {
+    if (window.confirm("Kosongkan semua item dalam bakul?")) {
+      setCart([]);
+    }
   };
 
   const resetForm = () => {
@@ -219,7 +238,7 @@ const App: React.FC = () => {
         timestamp: new Date().toISOString(),
         isAutoSync: isAuto,
         data: clients.map(c => ({
-          date: c.date,
+          date: c.date, // Send exact stored format (ISO preferred)
           name: c.name,
           phone: c.phone,
           address: c.address,
@@ -241,7 +260,7 @@ const App: React.FC = () => {
       localStorage.setItem('hm_last_sync_time', now);
       setLastSyncStatus('success');
       setTimeout(() => setLastSyncStatus(null), 5000);
-      if (!isAuto) alert("Penyegerakan berjaya dihantar ke Google Sheets.");
+      if (!isAuto) alert("Data telah dihantar ke Google Sheets.");
     } catch (error) {
       console.error("Sync Error:", error);
       setLastSyncStatus('error');
@@ -257,7 +276,8 @@ const App: React.FC = () => {
 
     const record: ClientRecord = {
       id: editId || Date.now().toString(),
-      date: formatDateForDisplay(clientForm.date),
+      // Store date as ISO string (YYYY-MM-DD) for consistency
+      date: clientForm.date, 
       name: clientForm.name,
       phone: clientForm.phone,
       address: clientForm.address,
@@ -280,14 +300,23 @@ const App: React.FC = () => {
     resetForm();
 
     if (printerSettings.autoSync) {
-      setTimeout(() => syncToGoogleSheet(true), 500);
+      // Small delay to ensure state update
+      setTimeout(() => syncToGoogleSheet(true), 1000);
     }
   };
 
   const editClient = (record: ClientRecord) => {
     setEditId(record.id);
+    
+    // Check if record date is in legacy format DD/MM/YYYY
+    let isoDate = record.date;
+    if (record.date.includes('/')) {
+        const [d, m, y] = record.date.split('/');
+        isoDate = `${y}-${m}-${d}`;
+    }
+
     setClientForm({
-      date: formatDateForInput(record.date),
+      date: isoDate,
       name: record.name,
       phone: record.phone,
       address: record.address,
@@ -312,8 +341,11 @@ const App: React.FC = () => {
   };
 
   const connectBluetooth = async () => {
+    if (!navigator.bluetooth) {
+      return alert("Pelayar web ini tidak menyokong Bluetooth Web.");
+    }
     try {
-      const device = await (navigator as any).bluetooth.requestDevice({
+      const device = await navigator.bluetooth.requestDevice({
         filters: [{ services: [PRINTER_SERVICE_UUID] }],
         optionalServices: [PRINTER_SERVICE_UUID]
       });
@@ -327,8 +359,16 @@ const App: React.FC = () => {
         });
       }
     } catch (error) {
-      alert("Gagal menyambung Bluetooth. Pastikan Bluetooth dihidupkan.");
+      console.error(error);
+      alert("Gagal menyambung Bluetooth. Pastikan peranti dihidupkan dan tidak bersambung ke peranti lain.");
     }
+  };
+
+  const disconnectBluetooth = () => {
+    if (bt.device && bt.device.gatt?.connected) {
+      bt.device.gatt.disconnect();
+    }
+    setBt({ device: null, characteristic: null, status: 'Bluetooth: Terputus', connected: false });
   };
 
   const handleBluetoothPrintTrigger = () => {
@@ -427,7 +467,7 @@ const App: React.FC = () => {
   const exportCSV = () => {
     const headers = ["Tarikh", "Nama", "Telefon", "Alamat", "Servis", "Jumlah", "Bayaran"];
     const rows = clients.map(c => [
-      c.date, 
+      formatDateForDisplay(c.date), 
       `"${c.name.replace(/"/g, '""')}"`, 
       c.phone || '-', 
       `"${(c.address || '').replace(/"/g, '""')}"`, 
@@ -440,7 +480,7 @@ const App: React.FC = () => {
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `HM_Records_${new Date().getTime()}.csv`;
+    link.download = `HM_Records_${getTodayISO()}.csv`;
     link.click();
   };
 
@@ -462,7 +502,7 @@ const App: React.FC = () => {
     <div className="min-h-screen">
       {/* Navigation */}
       <nav className="fixed top-0 left-0 w-full bg-black/95 border-b-2 border-law-gold z-50 flex justify-between items-center px-6 py-4 shadow-lg shadow-black/50">
-        <div className="text-lg md:text-xl font-bold font-cinzel bg-gradient-to-r from-law-red via-law-orange to-law-yellow bg-clip-text text-transparent">
+        <div className="text-lg md:text-xl font-bold font-cinzel bg-gradient-to-r from-law-red via-law-orange to-law-yellow bg-clip-text text-transparent cursor-pointer" onClick={() => window.scrollTo({top: 0, behavior: 'smooth'})}>
           HAIRI MUSTAFA ASSOCIATES
         </div>
         <div className="flex items-center gap-6">
@@ -505,7 +545,12 @@ const App: React.FC = () => {
 
           <div className="relative group">
             <i className="fas fa-search absolute left-4 top-1/2 -translate-y-1/2 text-law-gold group-focus-within:text-law-yellow transition-colors"></i>
-            <input className="w-full bg-gray-900/80 border border-law-gold/20 pl-12 pr-4 py-4 rounded-xl outline-none focus:border-law-gold focus:ring-1 focus:ring-law-gold/30 transition-all text-sm" placeholder="Cari perkhidmatan dalam pangkalan data..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
+            <input className="w-full bg-gray-900/80 border border-law-gold/20 pl-12 pr-10 py-4 rounded-xl outline-none focus:border-law-gold focus:ring-1 focus:ring-law-gold/30 transition-all text-sm" placeholder="Cari perkhidmatan dalam pangkalan data..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
+            {searchTerm && (
+              <button onClick={() => setSearchTerm('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-white p-2">
+                <i className="fas fa-times"></i>
+              </button>
+            )}
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
@@ -625,6 +670,11 @@ const App: React.FC = () => {
             
             <div className="flex justify-between items-center border-b border-gray-800 pb-4 mb-6">
               <h3 className="text-law-gold font-cinzel text-xl">Butiran Tempahan</h3>
+              {cart.length > 0 && (
+                <button onClick={clearCart} className="text-gray-500 hover:text-law-red text-[10px] uppercase font-bold tracking-wider transition-colors">
+                  <i className="fas fa-trash-alt mr-1"></i> Kosongkan
+                </button>
+              )}
             </div>
 
             <div className="flex-1 space-y-3 max-h-[350px] overflow-y-auto mb-8 pr-2 custom-scrollbar">
@@ -655,12 +705,19 @@ const App: React.FC = () => {
               </div>
 
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                <button onClick={connectBluetooth} className="col-span-2 md:col-span-4 bg-gray-800/80 p-3 rounded-xl font-bold text-xs hover:bg-gray-700 transition-all border border-gray-700 flex items-center justify-center gap-3 uppercase tracking-widest active:scale-95">
-                  <i className="fab fa-bluetooth-b"></i> 
-                  <span>{bt.connected ? 'SAMBUNGAN AKTIF' : 'SAMBUNG PRINTER BT'}</span>
-                </button>
+                {bt.connected ? (
+                   <button onClick={disconnectBluetooth} className="col-span-2 md:col-span-4 bg-red-900/30 p-3 rounded-xl font-bold text-xs hover:bg-red-900/50 text-red-400 transition-all border border-red-900/50 flex items-center justify-center gap-3 uppercase tracking-widest active:scale-95">
+                     <i className="fab fa-bluetooth-b"></i> 
+                     <span>PUTUSKAN PRINTER ({bt.device?.name || 'Unknown'})</span>
+                   </button>
+                ) : (
+                  <button onClick={connectBluetooth} className="col-span-2 md:col-span-4 bg-gray-800/80 p-3 rounded-xl font-bold text-xs hover:bg-gray-700 transition-all border border-gray-700 flex items-center justify-center gap-3 uppercase tracking-widest active:scale-95">
+                    <i className="fab fa-bluetooth-b"></i> 
+                    <span>SAMBUNG PRINTER BT</span>
+                  </button>
+                )}
                 
-                <button onClick={handleBluetoothPrintTrigger} className="bg-blue-600/90 p-3 rounded-xl text-[10px] font-bold hover:bg-blue-500 transition-all shadow-lg shadow-blue-900/20 uppercase active:scale-95">BT PRINT</button>
+                <button onClick={handleBluetoothPrintTrigger} disabled={!bt.connected} className={`bg-blue-600/90 p-3 rounded-xl text-[10px] font-bold hover:bg-blue-500 transition-all shadow-lg shadow-blue-900/20 uppercase active:scale-95 ${!bt.connected && 'opacity-50 cursor-not-allowed'}`}>BT PRINT</button>
                 <button onClick={sendWa} className="bg-green-600/90 p-3 rounded-xl text-[10px] font-bold hover:bg-green-500 transition-all shadow-lg shadow-green-900/20 uppercase active:scale-95">WHATSAPP</button>
                 <button onClick={() => handlePrint('thermal')} className="bg-sky-600/90 p-3 rounded-xl text-[10px] font-bold hover:bg-sky-500 transition-all shadow-lg shadow-sky-900/20 uppercase active:scale-95">THERMAL PC</button>
                 <button onClick={() => handlePrint('a5')} className="bg-white text-black p-3 rounded-xl text-[10px] font-bold hover:bg-gray-200 transition-all shadow-lg shadow-white/10 uppercase active:scale-95">RESIT A5</button>
@@ -713,9 +770,9 @@ const App: React.FC = () => {
             </div>
           </div>
 
-          <div className="overflow-x-auto rounded-2xl border border-gray-800 bg-law-card/50 shadow-inner backdrop-blur-sm">
+          <div className="overflow-x-auto rounded-2xl border border-gray-800 bg-law-card/50 shadow-inner backdrop-blur-sm max-h-[600px] custom-scrollbar">
             <table className="w-full text-left text-xs">
-              <thead className="bg-gray-900/80 text-law-gold uppercase tracking-widest font-bold sticky top-0 z-10">
+              <thead className="bg-gray-900/80 text-law-gold uppercase tracking-widest font-bold sticky top-0 z-10 backdrop-blur-sm shadow-sm">
                 <tr>
                   <th className="p-5 border-b border-gray-800">AKSI</th>
                   <th className="p-5 border-b border-gray-800">TARIKH</th>
@@ -725,7 +782,7 @@ const App: React.FC = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-800/50">
-                {clients.map((c) => (
+                {sortedClients.map((c) => (
                   <tr 
                     key={c.id} 
                     className={`transition-all duration-300 group ${editId === c.id ? 'bg-indigo-900/40 ring-2 ring-inset ring-indigo-500/50 z-10' : 'hover:bg-white/5'}`}
@@ -749,7 +806,7 @@ const App: React.FC = () => {
                       </div>
                     </td>
                     <td className={`p-5 tabular-nums ${editId === c.id ? 'text-indigo-200 font-bold' : 'text-gray-400'}`}>
-                      {c.date}
+                      {formatDateForDisplay(c.date)}
                     </td>
                     <td className="p-5">
                       <div className="flex flex-col">
@@ -892,6 +949,7 @@ const App: React.FC = () => {
                     <i className="fas fa-history text-law-gold text-[10px]"></i>
                     <label className="text-xs text-law-gold uppercase font-black tracking-widest">Auto-Save (Saat)</label>
                   </div>
+                  {/* Note: This now controls the debounce timeout in a way, although code uses hardcoded 2000ms. Kept for legacy compatibility if user wants to expand later */}
                   <input type="number" min="5" className="w-full bg-black border border-gray-800 p-4 rounded-xl text-sm text-gray-300 focus:border-law-gold outline-none transition-all" value={printerSettings.autoSaveInterval} onChange={(e) => setPrinterSettings({ ...printerSettings, autoSaveInterval: parseInt(e.target.value) || 60 })} />
                 </div>
                 <div className="space-y-4">

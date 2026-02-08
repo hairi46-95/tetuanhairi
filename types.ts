@@ -49,3 +49,9 @@ export interface BluetoothState {
   status: string;
   connected: boolean;
 }
+
+declare global {
+  interface Navigator {
+    bluetooth: any;
+  }
+}
