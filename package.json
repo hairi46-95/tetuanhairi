@@ -9,9 +9,11 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "react-dom": "^19.2.4",
+    "@google/genai": "^1.38.0",
+    "@netlify/blobs": "^10.7.0",
+    "@netlify/functions": "^5.1.2",
     "react": "^19.2.4",
-    "@google/genai": "^1.38.0"
+    "react-dom": "^19.2.4"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",
