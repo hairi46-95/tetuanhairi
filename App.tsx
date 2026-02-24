@@ -3,12 +3,17 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { Service, ClientRecord, CartItem, PaymentMethod, BluetoothState, PrinterSettings } from './types';
 import { INITIAL_SERVICES, PRINTER_SERVICE_UUID, PRINTER_CHARACTERISTIC_UUID } from './constants';
 import { analyzeLegalServices, generateLegalAdvice } from './services/geminiService';
-import { 
-  ESC_INIT, ESC_ALIGN_CENTER, ESC_ALIGN_LEFT, 
-  ESC_BOLD_ON, ESC_BOLD_OFF, ESC_FEED, 
+import {
+  ESC_INIT, ESC_ALIGN_CENTER, ESC_ALIGN_LEFT,
+  ESC_BOLD_ON, ESC_BOLD_OFF, ESC_FEED,
   FONT_SIZE_NORMAL, FONT_SIZE_LARGE, FONT_SIZE_DOUBLE_HEIGHT,
-  textToBytes, sendDataToPrinter, getSeparator 
+  textToBytes, sendDataToPrinter, getSeparator
 } from './utils/bluetoothUtils';
+
+type CloudStatus = 'connected' | 'syncing' | 'error' | 'offline';
+
+const POLL_INTERVAL = 10000; // 10 seconds
+const PUSH_DEBOUNCE = 1500; // 1.5 seconds
 
 const DEFAULT_PRINTER_SETTINGS: PrinterSettings = {
   paperWidth: '58mm',
@@ -106,6 +111,110 @@ const App: React.FC = () => {
     connected: false
   });
 
+  // --- Cloud Sync State ---
+  const [cloudStatus, setCloudStatus] = useState<CloudStatus>('offline');
+  const [isCloudLoading, setIsCloudLoading] = useState(true);
+  const cloudVersionRef = useRef('0');
+  const isRemoteUpdate = useRef(false);
+  const pushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const servicesRef = useRef(services);
+  const clientsRef = useRef(clients);
+
+  // Keep refs in sync with state
+  useEffect(() => { servicesRef.current = services; }, [services]);
+  useEffect(() => { clientsRef.current = clients; }, [clients]);
+
+  const fetchFromCloud = useCallback(async () => {
+    try {
+      setCloudStatus('syncing');
+      const res = await fetch('/api/sync');
+      if (!res.ok) throw new Error('Fetch failed');
+      const data = await res.json();
+
+      const cloudHasData = (data.services && data.services.length > 0) || (data.clients && data.clients.length > 0);
+
+      if (cloudHasData) {
+        isRemoteUpdate.current = true;
+        if (data.services && data.services.length > 0) {
+          setServices(data.services);
+        }
+        if (data.clients && data.clients.length > 0) {
+          setClients(data.clients);
+        }
+        cloudVersionRef.current = data.version || '0';
+        setCloudStatus('connected');
+        // Small delay before allowing local pushes again
+        setTimeout(() => { isRemoteUpdate.current = false; }, 500);
+      } else {
+        // Cloud is empty - push local data up as seed
+        cloudVersionRef.current = data.version || '0';
+        setCloudStatus('connected');
+        // Push current local data to cloud after a short delay
+        setTimeout(() => {
+          pushToCloud(servicesRef.current, clientsRef.current);
+        }, 300);
+      }
+    } catch (e) {
+      console.error('Cloud fetch error:', e);
+      setCloudStatus('error');
+      isRemoteUpdate.current = false;
+    } finally {
+      setIsCloudLoading(false);
+    }
+  }, [pushToCloud]);
+
+  const pushToCloud = useCallback(async (svc: Service[], cli: ClientRecord[]) => {
+    try {
+      setCloudStatus('syncing');
+      const res = await fetch('/api/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ services: svc, clients: cli })
+      });
+      if (!res.ok) throw new Error('Push failed');
+      const data = await res.json();
+      cloudVersionRef.current = data.version;
+      setCloudStatus('connected');
+    } catch (e) {
+      console.error('Cloud push error:', e);
+      setCloudStatus('error');
+    }
+  }, []);
+
+  const debouncedPush = useCallback(() => {
+    if (isRemoteUpdate.current || isCloudLoading) return;
+    if (pushTimerRef.current) clearTimeout(pushTimerRef.current);
+    pushTimerRef.current = setTimeout(() => {
+      pushToCloud(servicesRef.current, clientsRef.current);
+    }, PUSH_DEBOUNCE);
+  }, [pushToCloud, isCloudLoading]);
+
+  const pollCloud = useCallback(async () => {
+    try {
+      const res = await fetch('/api/sync?check=true');
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.version !== cloudVersionRef.current) {
+        await fetchFromCloud();
+      } else if (cloudStatus === 'error') {
+        setCloudStatus('connected');
+      }
+    } catch (e) {
+      // Silent fail for polling
+    }
+  }, [fetchFromCloud, cloudStatus]);
+
+  // Fetch from cloud on mount
+  useEffect(() => {
+    fetchFromCloud();
+  }, [fetchFromCloud]);
+
+  // Poll for changes from other devices
+  useEffect(() => {
+    const interval = setInterval(pollCloud, POLL_INTERVAL);
+    return () => clearInterval(interval);
+  }, [pollCloud]);
+
   // --- Derived State ---
   const filteredServices = useMemo(() => {
     return services.filter(s => 
@@ -130,11 +239,13 @@ const App: React.FC = () => {
   // --- Effects ---
   useEffect(() => {
     localStorage.setItem('hm_services', JSON.stringify(services));
-  }, [services]);
+    debouncedPush();
+  }, [services, debouncedPush]);
 
   useEffect(() => {
     localStorage.setItem('hm_clients', JSON.stringify(clients));
-  }, [clients]);
+    debouncedPush();
+  }, [clients, debouncedPush]);
 
   useEffect(() => {
     localStorage.setItem('hm_printer_settings', JSON.stringify(printerSettings));
@@ -521,6 +632,35 @@ const App: React.FC = () => {
       <div className={`fixed top-24 left-1/2 -translate-x-1/2 z-[60] bg-law-gold/90 text-black px-4 py-2 rounded-full text-xs font-bold flex items-center gap-2 shadow-xl border border-law-yellow transition-all duration-500 transform ${isAutoSaveNotifying ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-4 pointer-events-none'}`}>
         <i className="fas fa-check-circle"></i>
         <span>Draft Disimpan Automatik</span>
+      </div>
+
+      {/* Cloud sync status indicator */}
+      <div className="fixed bottom-4 right-4 z-[60]">
+        <div className={`flex items-center gap-2 px-4 py-2.5 rounded-full text-[10px] font-bold uppercase tracking-widest shadow-xl border backdrop-blur-sm transition-all duration-300 ${
+          cloudStatus === 'connected' ? 'bg-green-900/80 text-green-400 border-green-700/50' :
+          cloudStatus === 'syncing' ? 'bg-blue-900/80 text-blue-400 border-blue-700/50' :
+          cloudStatus === 'error' ? 'bg-red-900/80 text-red-400 border-red-700/50' :
+          'bg-gray-900/80 text-gray-400 border-gray-700/50'
+        }`}>
+          <div className={`w-2 h-2 rounded-full ${
+            cloudStatus === 'connected' ? 'bg-green-400' :
+            cloudStatus === 'syncing' ? 'bg-blue-400 animate-pulse' :
+            cloudStatus === 'error' ? 'bg-red-400' :
+            'bg-gray-400'
+          }`}></div>
+          <i className={`fas ${
+            cloudStatus === 'connected' ? 'fa-cloud' :
+            cloudStatus === 'syncing' ? 'fa-sync fa-spin' :
+            cloudStatus === 'error' ? 'fa-exclamation-triangle' :
+            'fa-cloud'
+          }`}></i>
+          <span>{
+            cloudStatus === 'connected' ? 'Segerak' :
+            cloudStatus === 'syncing' ? 'Menyegerak...' :
+            cloudStatus === 'error' ? 'Luar Talian' :
+            'Menghubung...'
+          }</span>
+        </div>
       </div>
 
       <main className="container mx-auto px-4 pt-24 pb-12 space-y-12">
